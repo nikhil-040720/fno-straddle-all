@@ -116,17 +116,17 @@ def get_standard_monthly_expiries(trade_date, number=2):
 
 
 def get_cycle_start_cutoff(active_expiry_date):
-    """5 trading days before the previous monthly expiry."""
+    """4 trading days before the previous monthly expiry."""
     prev_m = 12 if active_expiry_date.month == 1 else active_expiry_date.month - 1
     prev_y = active_expiry_date.year - 1 if active_expiry_date.month == 1 else active_expiry_date.year
     prev_expiry = monthly_expiry(prev_y, prev_m).date()
 
     cur = prev_expiry - timedelta(days=1)
     trading_days_counted = 0
-    while trading_days_counted < 5:
+    while trading_days_counted < 4:
         if is_trading_day(cur):
             trading_days_counted += 1
-            if trading_days_counted == 5:
+            if trading_days_counted == 4:
                 break
         cur -= timedelta(days=1)
     return cur
@@ -302,10 +302,10 @@ def main():
 
     cur = curr_exp_dt - timedelta(days=1)
     trading_days_counted = 0
-    while trading_days_counted < 5:
+    while trading_days_counted < 4:
         if is_trading_day(cur):
             trading_days_counted += 1
-            if trading_days_counted == 5:
+            if trading_days_counted == 4:
                 break
         cur -= timedelta(days=1)
     overlap_start_date = cur
