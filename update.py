@@ -7,6 +7,7 @@ import pandas as pd
 import requests
 
 REPO_FILE = Path("current_month.csv")
+GAPS_FILE = Path("strike_gaps.csv")
 
 NSE_URL = (
     "https://nsearchives.nseindia.com/content/fo/"
@@ -22,7 +23,6 @@ HEADERS = {
     "Referer": "https://www.nseindia.com/",
 }
 
-# Exclude indices or unwanted symbols
 SYMBOLS_TO_EXCLUDE = {
     "NIFTY",
     "BANKNIFTY",
@@ -31,7 +31,10 @@ SYMBOLS_TO_EXCLUDE = {
     "NIFTYNXT50",
 }
 
-# NSE F&O holidays for 2026
+SYMBOL_RENAMES = {
+    "ICICIPRULI": "ICICILIFE",
+}
+
 NSE_HOLIDAYS_2026 = {
     "2026-01-26",
     "2026-03-03",
@@ -49,6 +52,26 @@ NSE_HOLIDAYS_2026 = {
     "2026-11-24",
     "2026-12-25",
 }
+
+
+def load_strike_gaps():
+    if not GAPS_FILE.exists():
+        print("Warning: strike_gaps.csv not found. Falling back to closest available strike.")
+        return {}
+    gaps_df = pd.read_csv(GAPS_FILE)
+    gaps_df.columns = [str(c).strip() for c in gaps_df.columns]
+    gaps = {}
+    for _, row in gaps_df.iterrows():
+        sym = str(row["Symbol"]).strip().upper()
+        sym = SYMBOL_RENAMES.get(sym, sym)
+        try:
+            gaps[sym] = float(row["Gap"])
+        except (ValueError, TypeError):
+            pass
+    return gaps
+
+
+STRIKE_GAPS = load_strike_gaps()
 
 
 def is_trading_day(d):
@@ -133,11 +156,6 @@ def download_nse(trade_date):
             return pd.read_csv(f, low_memory=False)
 
 
-SYMBOL_RENAMES = {
-    "ICICIPRULI": "ICICILIFE",
-}
-
-
 def clean_data(df):
     df.columns = [str(c).strip() for c in df.columns]
 
@@ -170,6 +188,7 @@ def calculate_for_symbol(df, symbol, trade_date, target_expiry_ts):
     if futures.empty or options.empty:
         return []
 
+    # Standard monthly expiry for stocks
     opt_expiry = target_expiry_ts
 
     fut = futures[futures["XpryDt"] == target_expiry_ts].copy()
@@ -192,12 +211,17 @@ def calculate_for_symbol(df, symbol, trade_date, target_expiry_ts):
     if future_ref_price == 0.0:
         return []
 
-    # Find ATM strike in Python ONLY to grab the correct CE and PE prices from the bhavcopy
     strikes = sorted(opt_exp["StrkPric"].dropna().unique())
     if not strikes:
         return []
 
-    atm_strike = min(strikes, key=lambda x: abs(x - future_ref_price))
+    # Use strike gap from strike_gaps.csv if available
+    gap = STRIKE_GAPS.get(symbol)
+    if gap and gap > 0:
+        target_strike = round(future_ref_price / gap) * gap
+        atm_strike = min(strikes, key=lambda x: abs(x - target_strike))
+    else:
+        atm_strike = min(strikes, key=lambda x: abs(x - future_ref_price))
 
     ce = opt_exp[(opt_exp["StrkPric"] == atm_strike) & (opt_exp["OptnTp"] == "CE")]
     pe = opt_exp[(opt_exp["StrkPric"] == atm_strike) & (opt_exp["OptnTp"] == "PE")]
@@ -207,15 +231,21 @@ def calculate_for_symbol(df, symbol, trade_date, target_expiry_ts):
 
     ce_price = float(ce.iloc[0]["CleanPrice"])
     pe_price = float(pe.iloc[0]["CleanPrice"])
+    straddle = ce_price + pe_price
+    straddle_pct = (straddle / future_ref_price * 100) if future_ref_price else None
 
     return [{
         "Trade Date": trade_date.strftime("%Y-%m-%d"),
         "Symbol": symbol,
         "Expiry": opt_expiry.strftime("%Y-%m-%d"),
         "Futures Close": future_ref_price,
+        "ATM Strike": atm_strike,
         "CE Close": ce_price,
         "PE Close": pe_price,
+        "Straddle": straddle,
+        "Straddle %": straddle_pct,
     }]
+
 
 def process_date(trade_date, target_expiries):
     print(f"Downloading NSE data for {trade_date:%Y-%m-%d}...")
@@ -248,8 +278,11 @@ def save_cycle_data(df):
         "Symbol",
         "Expiry",
         "Futures Close",
+        "ATM Strike",
         "CE Close",
         "PE Close",
+        "Straddle",
+        "Straddle %",
     ]
     df = df[columns].copy()
     df = df.sort_values(["Trade Date", "Symbol", "Expiry"])
