@@ -1,10 +1,10 @@
 name: Daily F&O Straddle Data Update
 
 on:
-  schedule:
-    # Runs at 15:00 UTC (8:30 PM IST) Monday through Friday
-    - cron: '0 15 * * 1-5'
   workflow_dispatch:
+  schedule:
+    # 20:35 IST (8:35 PM) = 15:05 UTC (Mon - Fri)
+    - cron: "5 15 * * 1-5"
 
 permissions:
   contents: write
